@@ -400,6 +400,42 @@ class SMB2ManagerTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testReadHandle() async throws {
+        let file = "readhandle.dat"
+        let size = 0x300000
+        let smb = SMB2Manager(url: server, credential: credential)!
+        let data = randomData(size: size)
+
+        addTeardownBlock {
+            try? await smb.removeFile(atPath: file)
+            try await smb.disconnectShare(gracefully: true)
+        }
+
+        try await smb.connectShare(name: share, encrypted: encrypted)
+        try await smb.write(data: data, toPath: file, progress: nil)
+
+        let handle = try await smb.openFileForReading(atPath: file)
+        XCTAssertEqual(handle.size, UInt64(size))
+
+        // Ranges in arbitrary order, including one larger than a single SMB read.
+        for (offset, length) in [(0x200000, 4096), (0, 512), (12345, 0x250000), (size - 100, 100), (777, 0)] {
+            let chunk = try await handle.read(offset: UInt64(offset), length: length)
+            XCTAssertEqual(chunk, data[offset..<(offset + length)])
+        }
+
+        // Reading past the end of file returns only the bytes that exist.
+        let tail = try await handle.read(offset: UInt64(size - 10), length: 100)
+        XCTAssertEqual(tail, data.suffix(10))
+        let beyond = try await handle.read(offset: UInt64(size + 10), length: 100)
+        XCTAssertTrue(beyond.isEmpty)
+
+        try await handle.close()
+        do {
+            _ = try await handle.read(offset: 0, length: 1)
+            XCTFail("Reading a closed handle must fail.")
+        } catch {}
+    }
+
     func testUploadDownload() async throws {
         let smb = SMB2Manager(url: server, credential: credential)!
         let size: Int = random(max: 0xf00000)

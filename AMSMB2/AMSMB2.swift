@@ -1413,6 +1413,35 @@ public class SMB2Manager: NSObject, NSSecureCoding, Codable, NSCopying, CustomRe
 }
 
 extension SMB2Manager {
+    /**
+     Opens a file for repeated random-access reads over a single file handle.
+
+     Use this instead of `contents(atPath:range:)` when reading many ranges of the same file,
+     as it avoids opening and closing the file for each read.
+
+     - Parameters:
+       - atPath: path of file to be opened.
+     - Returns: a handle which reads byte ranges of the file until it is closed or released.
+     */
+    public func openFileForReading(atPath path: String) async throws -> SMB2ReadHandle {
+        try await perform { client in
+            let file = try SMB2FileHandle(forReadingAtPath: path, on: client)
+            let size = try file.fstat().smb2_size
+            return SMB2ReadHandle(manager: self, file: file, size: size)
+        }
+    }
+
+    /// Runs `handler` on the operation queue with the connected client.
+    func perform<T: Sendable>(
+        _ handler: @Sendable @escaping (_ client: SMB2Client) throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            with(completionHandler: asyncHandler(continuation), handler: handler)
+        }
+    }
+}
+
+extension SMB2Manager {
     private func queue(_ closure: @Sendable @escaping () -> Void) {
         operationLock.lock()
         operationCount += 1
